@@ -1,5 +1,7 @@
 # HPL-Py — the Linpack benchmark in readable Python
 
+**DISCLAIMER: All the code in this repository was written with AI tools**
+
 A re-implementation of the pipeline behind the
 [HPL](https://www.netlib.org/benchmark/hpl/) benchmark — the program that
 decides the TOP500 ranking of the world's fastest supercomputers — in a
