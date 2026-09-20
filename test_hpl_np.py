@@ -266,6 +266,27 @@ class TestReportAndCLI(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("seed=123", buf.getvalue())
 
+    def test_default_n_is_4096(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            hpl_np.main(["--no-top500"])
+        self.assertIn("N=4096", buf.getvalue())
+
+    def test_run_prints_try_other_sizes_tip(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = hpl_np.main(["-n", "60", "--repeats", "1"])
+        self.assertEqual(code, 0)
+        self.assertIn("Try -n 8192", buf.getvalue())
+
+    def test_no_top500_still_prints_tip(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = hpl_np.main(["-n", "60", "--no-top500"])
+        self.assertEqual(code, 0)
+        self.assertIn("Try -n 8192", buf.getvalue())
+        self.assertNotIn("TOP500 calibration", buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
