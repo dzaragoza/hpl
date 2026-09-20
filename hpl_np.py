@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """NumPy version of the tiny HPL Linpack benchmark.
 
 This is what "real life" Python Linpack looks like: the classic HPL
