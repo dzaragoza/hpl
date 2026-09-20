@@ -18,10 +18,10 @@ of its stack: LAPACK's `dgetrf` (LU with partial pivoting) and `dgetrs`
 python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt                      # just numpy>=1.24
 
-python3 hpl_np.py                    # N=2000
+python3 hpl_np.py                    # N=4096
 ./hpl_np.py -n 4096 --repeats 3      # same thing: the script is executable
 python3 hpl_np.py --blas-info       # which BLAS? how many cores are used?
-python3 -m unittest test_hpl_np     # 28 tests
+python3 -m unittest test_hpl_np     # 31 tests
 ```
 
 Under the **fish** shell, `source`/`deactivate` are bash-isms; use fish's
@@ -32,7 +32,7 @@ python3 -m venv .venv
 source .venv/bin/activate.fish
 pip install -r requirements.txt
 
-./hpl_np.py                          # N=2000
+./hpl_np.py                          # N=4096
 ./hpl_np.py -n 4096 --repeats 3
 ./hpl_np.py --blas-info
 python3 -m unittest test_hpl_np
@@ -107,7 +107,7 @@ Gflop/s would have topped, and the **last** one you would have made at
 all:
 
 ```
-TOP500 calibration              (67 editions, June 1993 - June 2026)
+TOP500 calibration              (68 editions, June 1993 - June 2026)
 ------------------------------------------------------------------------------
      181.0 Gflop/s would have been:
   the world's No. 1 in November 1995   (then No. 1: Numerical Wind
@@ -155,9 +155,9 @@ OpenBLAS).
 ## Files
 
 - `hpl_np.py` — the benchmark (docstrings double as the explainer)
-- `test_hpl_np.py` — 28 tests: generator, residual-check semantics,
+- `test_hpl_np.py` — 31 tests: generator, residual-check semantics,
   benchmark invariants, flop count, report, CLI, TOP500 lookup
-- `top500_data.json` — all 67 TOP500 editions (June 1993 - June 2026):
+- `top500_data.json` — all 68 TOP500 editions (June 1993 - June 2026):
   #1 and #500 Rmax per edition, in Gflop/s
 - `top500_update.py` — maintenance: re-download the lists into the JSON
 - `requirements.txt` — numpy>=1.24
