@@ -28,7 +28,7 @@ slightly better than a naive summation would give at the same N.
 
 Run it:
 
-    python3 hpl_np.py                    # N=2000
+    python3 hpl_np.py                    # N=4096
     python3 hpl_np.py -n 4000
     python3 hpl_np.py -n 4096 --repeats 3
     python3 hpl_np.py --blas-info        # is my BLAS using all my cores?
@@ -315,8 +315,8 @@ def print_report(res):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="NumPy HPL Linpack benchmark (np.linalg.solve)")
-    parser.add_argument("-n", "--n", type=int, default=2000,
-                        help="matrix order N (default 2000)")
+    parser.add_argument("-n", "--n", type=int, default=4096,
+                        help="matrix order N (default 4096)")
     parser.add_argument("--seed", type=int, default=42,
                         help="random seed (default 42)")
     parser.add_argument("--repeats", type=int, default=3,
@@ -338,6 +338,11 @@ def main(argv=None):
     print_report(res)
     if not args.no_top500:
         print_top500(res)
+    print()
+    print("Tip: this was N={} — Gflop/s keeps rising with N as the BLAS".format(args.n))
+    print("finds more parallel work.  Try -n 8192, -n 16384, -n 32768, ...")
+    print("Each run needs ~2*8*N^2 bytes of RAM (N=16384 ~ 4 GiB, N=32768")
+    print("~ 16 GiB), so stop at roughly 35-40% of your machine's memory.")
     return 0 if res["passed"] else 1
 
 
