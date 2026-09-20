@@ -12,6 +12,14 @@ naked — with the fast path being exactly what real HPL calls at the bottom
 of its stack: LAPACK's `dgetrf` (LU with partial pivoting) and `dgetrs`
 (triangular solves), inside a threaded, vectorized BLAS.
 
+## A note on provenance
+
+All code in this repository was written by an AI coding agent
+(Vibe Code, built by Mistral AI) at the direction of the repository
+owner, who reviewed, tested, and tuned it.  It is shared in the spirit
+of the project itself: making something normally opaque — the Linpack
+benchmark, and now its authorship too — a little more readable.
+
 ## Quick start
 
 ```bash
