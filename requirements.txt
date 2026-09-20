@@ -1,0 +1,7 @@
+# Requirements for hpl_np.py — the NumPy/LAPACK version of the benchmark.
+#
+# Install with:
+#     pip install -r requirements.txt
+#
+# hpl.py and hpl_mp.py are pure standard library and need nothing.
+numpy>=1.24
