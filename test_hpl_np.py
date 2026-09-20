@@ -3,15 +3,147 @@
 The benchmark path (gen_problem -> run_benchmark -> residual check)
 is fully self-contained, and so are these tests: the repo needs only
 hpl_np.py + requirements.txt + test_hpl_np.py to work on its own.
+
+The TOP500 tests additionally use top500_data.json when it sits next
+to hpl_np.py (regenerate it with top500_update.py); they self-skip
+otherwise, and the pure lookup logic is tested on a built-in mini list.
 """
 
 import contextlib
 import io
+import json
+import os
+import tempfile
 import unittest
 
 import numpy as np
 
 import hpl_np
+
+
+class TestTop500(unittest.TestCase):
+    """The end-of-run calibration against the bundled list history."""
+
+    MINI = [
+        {"edition": "1993-06", "label": "June 1993", "rmax_top": 59.7,
+         "rmax_entry": 0.422, "top_system": "CM-5/1024, Los Alamos"},
+        {"edition": "1997-06", "label": "June 1997", "rmax_top": 1068.0,
+         "rmax_entry": 5.7, "top_system": "ASCI Red, Sandia"},
+        {"edition": "2002-06", "label": "June 2002", "rmax_top": 35860.0,
+         "rmax_entry": 105.8, "top_system": "Earth Simulator, JAMSTEC"},
+        {"edition": "2020-06", "label": "June 2020", "rmax_top": 415530000.0,
+         "rmax_entry": 1340000.0, "top_system": "Fugaku, RIKEN"},
+    ]
+
+    def test_would_have_topped_1993(self):
+        top, entry = hpl_np.top500_calibration(100.0, self.MINI)
+        self.assertIsNotNone(top)
+        self.assertEqual(top["edition"], "1993-06")
+        self.assertEqual(entry["edition"], "1997-06")
+
+    def test_never_number_one_but_on_the_list(self):
+        top, entry = hpl_np.top500_calibration(10.0, self.MINI)
+        self.assertIsNone(top)
+        self.assertEqual(entry["edition"], "1997-06")
+
+    def test_boundary_exact_match_counts(self):
+        top, _ = hpl_np.top500_calibration(1068.0, self.MINI)
+        self.assertEqual(top["edition"], "1997-06")
+
+    def test_too_slow_for_any_list(self):
+        top, entry = hpl_np.top500_calibration(0.1, self.MINI)
+        self.assertIsNone(top)
+        self.assertIsNone(entry)
+
+    def test_faster_than_every_edition(self):
+        top, entry = hpl_np.top500_calibration(1e9, self.MINI)
+        self.assertEqual(top["edition"], "2020-06")
+        self.assertEqual(entry["edition"], "2020-06")
+
+    def test_calibration_is_monotone(self):
+        for g in (0.1, 1.0, 60.0, 1068.0, 35861.0, 5e8):
+            top, entry = hpl_np.top500_calibration(g, self.MINI)
+            if top is not None:
+                self.assertLessEqual(top["rmax_top"], g)
+            if entry is not None:
+                self.assertLessEqual(entry["rmax_entry"], g)
+
+    def test_bundled_data_is_usable_and_sorted(self):
+        editions = hpl_np.load_top500()
+        if editions is None:
+            self.skipTest("top500_data.json not next to hpl_np.py")
+        self.assertGreaterEqual(len(editions), 60)
+        self.assertEqual([e["edition"] for e in editions],
+                         sorted(e["edition"] for e in editions))
+        for ed in editions:
+            self.assertGreater(ed["rmax_top"], ed["rmax_entry"])
+        self.assertEqual(editions[0]["edition"], "1993-06")
+        self.assertLess(editions[0]["rmax_entry"], 1.0)
+
+    def test_load_top500_missing_file_returns_none(self):
+        self.assertIsNone(hpl_np.load_top500("/nonexistent/top500.json"))
+
+    def test_load_top500_corrupt_file_returns_none(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json",
+                                         delete=False) as fh:
+            fh.write("{not json at all")
+            path = fh.name
+        self.addCleanup(os.unlink, path)
+        self.assertIsNone(hpl_np.load_top500(path))
+
+    def test_load_top500_skips_bad_records(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json",
+                                         delete=False) as fh:
+            json.dump({"editions": [
+                {"edition": "1993-06", "label": "June 1993",
+                 "rmax_top": 59.7, "rmax_entry": 0.422,
+                 "top_system": "x"},
+                {"edition": "1994-06", "rmax_top": None, "rmax_entry": 1.0},
+                {"rmax_top": 1.0, "rmax_entry": 1.0},
+            ]}, fh)
+            path = fh.name
+        self.addCleanup(os.unlink, path)
+        editions = hpl_np.load_top500(path)
+        self.assertEqual([e["edition"] for e in editions], ["1993-06"])
+
+    def test_report_without_data_file_is_silent(self):
+        res = hpl_np.run_benchmark(200, seed=1, repeats=1)
+        orig = hpl_np.load_top500
+        hpl_np.load_top500 = lambda path=None: None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                hpl_np.print_top500(res)
+        finally:
+            hpl_np.load_top500 = orig
+        self.assertNotIn("TOP500", out.getvalue())
+
+    def test_report_with_too_slow_machine(self):
+        res = dict(hpl_np.run_benchmark(200, seed=1, repeats=1))
+        res["gflops"] = 0.01
+        editions = hpl_np.load_top500()
+        if editions is None:
+            self.skipTest("top500_data.json not next to hpl_np.py")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            hpl_np.print_top500(res)
+        text = out.getvalue()
+        self.assertIn("never have made ANY TOP500 list", text)
+        self.assertIn("1993", text)
+
+    def test_cli_no_top500_flag(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = hpl_np.main(["-n", "300", "--no-top500"])
+        self.assertIn("PASSED", out.getvalue())
+        self.assertEqual(rc, 0)
+        self.assertNotIn("TOP500 calibration", out.getvalue())
+
+    def test_cli_shows_calibration_with_bundled_data(self):
+        if hpl_np.load_top500() is None:
+            self.skipTest("top500_data.json not next to hpl_np.py")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = hpl_np.main(["-n", "300"])
+        self.assertIn("TOP500 calibration", out.getvalue())
+        self.assertIn("Gflop/s would have been", out.getvalue())
+        self.assertEqual(rc, 0)
 
 
 class TestGenProblem(unittest.TestCase):

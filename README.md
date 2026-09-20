@@ -21,7 +21,7 @@ pip install -r requirements.txt                      # just numpy>=1.24
 python3 hpl_np.py                    # N=2000
 python3 hpl_np.py -n 4096 --repeats 3
 python3 hpl_np.py --blas-info       # which BLAS? how many cores are used?
-python3 -m unittest test_hpl_np     # 14 tests
+python3 -m unittest test_hpl_np     # 28 tests
 ```
 
 ## What it does
@@ -63,7 +63,7 @@ too, because the gap between them is itself informative.
 ## Sizing N for your machine
 
 `np.linalg.solve` does not destroy your input, so it works on a full
-copy of `A`: peak memory is ~2× the matrix, i.e. ~2·8·N² bytes.  For a
+copy of `A`: peak memory is ~2× the matrix, i.e. ~2×8·N² bytes.  For a
 32 GiB laptop, that means N ≈ 40,000 is the practical ceiling — roughly
 `N ≈ √(0.35 × RAM / 8)` in general.  Past that, the run swaps and the
 "Gflop/s" number becomes disk speed, not compute.
@@ -79,6 +79,33 @@ calibration (AMD Ryzen 7 7840U, 8 cores, pip-installed numpy/OpenBLAS):
 
 181 Gflop/s is roughly the #1 TOP500 machine of late 1995 — a useful
 reminder of what 30 years of cache-blocking and SIMD engineering bought.
+
+## When would this machine have been a supercomputer?
+
+Every run ends with a TOP500 calibration.  `top500_data.json` (13 KB,
+next to the script) holds one record per list edition since June 1993:
+the Rmax of that edition's #1 system and of its #500.  After the report,
+the benchmark answers the fun question — the **last** edition your
+Gflop/s would have topped, and the **last** one you would have made at
+all:
+
+```
+TOP500 calibration              (67 editions, June 1993 - June 2026)
+------------------------------------------------------------------------------
+     181.0 Gflop/s would have been:
+  the world's No. 1 in November 1995   (then No. 1: Numerical Wind
+Tunnel, ... at 170.0 Gflop/s)
+  still on the list in June 2002   (entry threshold then: 134.3 Gflop/s)
+```
+
+That is the whole fun of it: the same 32-GiB laptop was the world's
+fastest machine in 1995 — and off the bottom of the list by 2002.
+
+Machines that are too slow for even the very first (June 1993, entry
+0.422 Gflop/s) list get a friendly note instead.  No network access
+happens at run time; `--no-top500` skips the section.  The data file was
+extracted from the top500.org list archives — refresh it after each
+June/November edition with `python3 top500_update.py`.
 
 ## The serial-BLAS trap
 
@@ -111,8 +138,11 @@ OpenBLAS).
 ## Files
 
 - `hpl_np.py` — the benchmark (docstrings double as the explainer)
-- `test_hpl_np.py` — 14 tests: generator, residual-check semantics,
-  benchmark invariants, flop count, report and CLI
+- `test_hpl_np.py` — 28 tests: generator, residual-check semantics,
+  benchmark invariants, flop count, report, CLI, TOP500 lookup
+- `top500_data.json` — all 67 TOP500 editions (June 1993 - June 2026):
+  #1 and #500 Rmax per edition, in Gflop/s
+- `top500_update.py` — maintenance: re-download the lists into the JSON
 - `requirements.txt` — numpy>=1.24
 - `LICENSE` — MIT
 - `README.md` — this file
