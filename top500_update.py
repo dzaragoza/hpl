@@ -1,5 +1,9 @@
 """Download TOP500 history from top500.org into top500_data.json.
 
+NOTE: this file was written by an AI coding agent (Vibe Code,
+Mistral AI) at the direction of the repository owner, who reviewed
+and tested it.  See the README for details.
+
 Run this once (with network access) to (re)generate the data file that
 hpl_np.py uses for its "when would this machine have been a
 supercomputer?" calibration.  hpl_np.py itself never touches the
