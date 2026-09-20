@@ -1,5 +1,9 @@
 """Tests for hpl_np.py — stdlib unittest plus numpy, nothing else.
 
+NOTE: this file was written by an AI coding agent (Vibe Code,
+Mistral AI) at the direction of the repository owner, who reviewed
+and tested it.  See the README for details.
+
 The benchmark path (gen_problem -> run_benchmark -> residual check)
 is fully self-contained, and so are these tests: the repo needs only
 hpl_np.py + requirements.txt + test_hpl_np.py to work on its own.
