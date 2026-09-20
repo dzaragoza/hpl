@@ -1,7 +1,5 @@
 # HPL-Py — the Linpack benchmark in readable Python
 
-**DISCLAIMER: All the code in this repository was written with AI tools**
-
 A re-implementation of the pipeline behind the
 [HPL](https://www.netlib.org/benchmark/hpl/) benchmark — the program that
 decides the TOP500 ranking of the world's fastest supercomputers — in a
@@ -21,9 +19,25 @@ python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\ac
 pip install -r requirements.txt                      # just numpy>=1.24
 
 python3 hpl_np.py                    # N=2000
-python3 hpl_np.py -n 4096 --repeats 3
+./hpl_np.py -n 4096 --repeats 3      # same thing: the script is executable
 python3 hpl_np.py --blas-info       # which BLAS? how many cores are used?
 python3 -m unittest test_hpl_np     # 28 tests
+```
+
+Under the **fish** shell, `source`/`deactivate` are bash-isms; use fish's
+`activate` wrapper instead:
+
+```fish
+python3 -m venv .venv
+source .venv/bin/activate.fish
+pip install -r requirements.txt
+
+./hpl_np.py                          # N=2000
+./hpl_np.py -n 4096 --repeats 3
+./hpl_np.py --blas-info
+python3 -m unittest test_hpl_np
+
+deactivate                           # fish's own, leaves the venv
 ```
 
 ## What it does
@@ -37,7 +51,7 @@ The same five stages as real HPL, one function each:
 4. **Check** the answer with the HPL residual:
 
    ```
-   scaled_residual =  |A·x − b||_∞ / (eps · ||A||_1 · ||x||_1 · N)
+   scaled_residual = ||A·x − b||_∞ / (eps · ||A||_1 · ||x||_1 · N)
    ```
 
    HPL accepts anything below 16.  Because it is measured in units of
@@ -73,11 +87,12 @@ copy of `A`: peak memory is ~2× the matrix, i.e. ~2×8·N² bytes.  For a
 Expect performance to rise with N and then flatten (more parallelism,
 then memory-bandwidth saturation).  One laptop's ladder, for
 calibration (AMD Ryzen 7 7840U, 8 cores, pip-installed numpy/OpenBLAS):
- | N | Gflop/s |
- |---|---|
- | 8192 | 64 |
- | 16384 | 113 |
- | 32768 | 181 |
+
+| N | Gflop/s |
+|---|---|
+| 8192 | 64 |
+| 16384 | 113 |
+| 32768 | 181 |
 
 181 Gflop/s is roughly the #1 TOP500 machine of late 1995 — a useful
 reminder of what 30 years of cache-blocking and SIMD engineering bought.
