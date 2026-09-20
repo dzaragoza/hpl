@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """NumPy version of the tiny HPL Linpack benchmark.
 
+NOTE: this file was written by an AI coding agent (Vibe Code,
+Mistral AI) at the direction of the repository owner, who reviewed
+and tested it.  See the README for details.
+
 This is what "real life" Python Linpack looks like: the classic HPL
 pipeline (generate -> solve -> residual check -> Gflop/s), with the
 factorization and solve delegated to LAPACK through NumPy.
