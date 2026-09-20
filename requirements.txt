@@ -1,7 +1,8 @@
-# Requirements for hpl_np.py — the NumPy/LAPACK version of the benchmark.
+# Requirements for hpl_np.py — the NumPy/LAPACK HPL Linpack benchmark.
 #
 # Install with:
 #     pip install -r requirements.txt
 #
-# hpl.py and hpl_mp.py are pure standard library and need nothing.
+# Only numpy is needed; pip wheels bundle threaded OpenBLAS.
+
 numpy>=1.24
