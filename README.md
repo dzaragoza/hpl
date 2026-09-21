@@ -26,10 +26,11 @@ benchmark, and now its authorship too — a little more readable.
 python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt                      # just numpy>=1.24
 
-python3 hpl_np.py                    # N=4096
-./hpl_np.py -n 4096 --repeats 3      # same thing: the script is executable
+python3 hpl_np.py                    # size picked for you: 25% of your RAM
+./hpl_np.py -g 4 --repeats 3         # or ask for a 4 GiB matrix
+python3 hpl_np.py -n 4096            # or set N the HPL way
 python3 hpl_np.py --blas-info       # which BLAS? how many cores are used?
-python3 -m unittest test_hpl_np     # 31 tests
+python3 -m unittest test_hpl_np     # 40 tests
 ```
 
 Under the **fish** shell, `source`/`deactivate` are bash-isms; use fish's
@@ -40,8 +41,8 @@ python3 -m venv .venv
 source .venv/bin/activate.fish
 pip install -r requirements.txt
 
-./hpl_np.py                          # N=4096
-./hpl_np.py -n 4096 --repeats 3
+./hpl_np.py                          # size picked for you: 25% of your RAM
+./hpl_np.py -g 4 --repeats 3
 ./hpl_np.py --blas-info
 python3 -m unittest test_hpl_np
 
@@ -76,6 +77,28 @@ inside OpenBLAS/MKL: SIMD-vectorized, cache-blocked, and multi-threaded
 (BLAS releases the GIL, so every core is used with no multiprocessing on
 your side).
 
+## What you see while it runs
+
+A benchmark that sits silent for minutes looks exactly like a crash, so
+each phase is announced as it happens — problem generation, the warm-up
+and every timed run (each with its own Gflop/s and the best so far), and
+the residual check — followed by the full report.
+
+```
+==============================================================================
+Sizing: 31.1 GiB of RAM detected -> default matrix is
+25% of that: 7.77 GiB -> N=32226
+The solve briefly needs ~2x the matrix: ~15.55 GiB of RAM.
+==============================================================================
+Phase 1/3: generating the random 32226x32226 problem...
+Phase 2/3: solving  A x = b  (1 warm-up + 3 timed runs)
+  warm-up :    12.03 s   (not counted)
+  run 1/3:    11.52 s   ->    194.4 Gflop/s   (best so far:    194.4)
+  run 2/3:    11.49 s   ->    194.9 Gflop/s   (best so far:    194.9)
+  run 3/3:    11.44 s   ->    195.7 Gflop/s   (best so far:    195.7)
+Phase 3/3: checking the residual (HPL's pass/fail test)...
+```
+
 ## Measuring like a benchmark, not a script
 
 Timing follows real benchmark practice (HPL's own): one **warm-up** run
@@ -84,23 +107,28 @@ low-power state — then the **best** of `--repeats` timed runs is the
 headline Rmax-style number.  First-call and median figures are printed
 too, because the gap between them is itself informative.
 
-## Sizing N for your machine
+## Sizing the problem for your machine
 
-`np.linalg.solve` does not destroy your input, so it works on a full
-copy of `A`: peak memory is ~2× the matrix, i.e. ~2×8·N² bytes.  For a
-32 GiB laptop, that means N ≈ 40,000 is the practical ceiling — roughly
-`N ≈ √(0.35 × RAM / 8)` in general.  Past that, the run swaps and the
-"Gflop/s" number becomes disk speed, not compute.
+Users think in memory, not matrix order — so the main knob is `-g GIB`:
+the size of the `N×N` matrix, converted to `N = floor(√(GIB·2³⁰/8))`
+and echoed back as both GiB and N in the report.  With no `-g` and no
+`-n`, the benchmark detects your physical RAM (standard library only:
+`/proc/meminfo` on Linux, `GlobalMemoryStatusEx` on Windows, `sysctl` on
+macOS) and defaults to a matrix of **25% of RAM** — safe because the
+solve briefly needs ~2× the matrix (`np.linalg.solve` does not destroy
+your input, so LAPACK factors a full copy of `A`): a default run peaks
+around **50% of RAM**.  HPL traditionalists can still set `N` directly
+with `-n`; the two flags are mutually exclusive.
 
-Expect performance to rise with N and then flatten (more parallelism,
-then memory-bandwidth saturation).  One laptop's ladder, for
-calibration (AMD Ryzen 7 7840U, 8 cores, pip-installed numpy/OpenBLAS):
+Expect performance to rise with size and then flatten (more parallelism,
+then memory-bandwidth saturation).  One laptop's ladder, for calibration
+(AMD Ryzen 7 7840U, 8 cores, pip-installed numpy/OpenBLAS):
 
-| N | Gflop/s |
-|---|---|
-| 8192 | 64 |
-| 16384 | 113 |
-| 32768 | 181 |
+| matrix | N | Gflop/s |
+|--------|-------|---------|
+| 0.5 GiB | 8192 | 64 |
+| 2 GiB | 16384 | 113 |
+| 8 GiB | 32768 | 181 |
 
 181 Gflop/s is roughly the #1 TOP500 machine of late 1995 — a useful
 reminder of what 30 years of cache-blocking and SIMD engineering bought.
@@ -149,11 +177,11 @@ i.e. how many cores the BLAS *actually* uses.  Fix: install numpy from
 pip inside a venv (or switch your distro's BLAS alternatives to
 OpenBLAS).
 
-## Tuning beyond N
+## Tuning beyond size
 
 - **Threads:** hyperthreads share FPUs, so 8 threads often beat 16 on a
   GEMM-heavy run.  Sweep with
-  `OPENBLAS_NUM_THREADS=8 python3 hpl_np.py -n 16384 --repeats 3`.
+  `OPENBLAS_NUM_THREADS=8 python3 hpl_np.py -g 2 --repeats 3`.
 - **NB (panel size)** is real HPL's second-most-important knob — inside
   LAPACK it is chosen heuristically (`ILAENV`) and is not exposed here.
 - Real HPL also tunes its process grid (P×Q), look-ahead depth, and
@@ -163,8 +191,9 @@ OpenBLAS).
 ## Files
 
 - `hpl_np.py` — the benchmark (docstrings double as the explainer)
-- `test_hpl_np.py` — 31 tests: generator, residual-check semantics,
-  benchmark invariants, flop count, report, CLI, TOP500 lookup
+- `test_hpl_np.py` — 40 tests: generator, residual-check semantics,
+  benchmark invariants, flop count, sizing, progress, report, CLI,
+  TOP500 lookup
 - `top500_data.json` — all 68 TOP500 editions (June 1993 - June 2026):
   #1 and #500 Rmax per edition, in Gflop/s
 - `top500_update.py` — maintenance: re-download the lists into the JSON
