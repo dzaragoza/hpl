@@ -30,11 +30,27 @@ Note on residuals: the HPL-style check here is computed in NumPy too,
 which itself uses pairwise summation — so the residual you get can be
 slightly better than a naive summation would give at the same N.
 
+Problem sizing: users think in memory, not matrix order, so the main
+knob is -g GIB — the size of the N x N matrix (8 bytes per entry,
+N = floor(sqrt(GIB * 2^30 / 8))).  The default is 25% of the detected
+physical RAM, which is also the safe side of the ~2x peak during the
+solve (np.linalg.solve works on a copy of A), so a default run tops
+out around 50% of RAM.  HPL traditionalists can still set N directly
+with -n; the report echoes both the GiB and the N.  RAM detection is
+standard library only: /proc/meminfo on Linux, GlobalMemoryStatusEx
+on Windows, sysctl on macOS, sysconf() elsewhere; if all of that
+fails, N=4096 (a 0.12 GiB matrix — safe on anything that runs numpy).
+
+While it runs, each phase is announced — generate, warm-up, timed
+runs with the Gflop/s so far, residual check — because a benchmark
+that sits silent for minutes looks exactly like a crash.
+
 Run it:
 
-    python3 hpl_np.py                    # N=4096
-    python3 hpl_np.py -n 4000
-    python3 hpl_np.py -n 4096 --repeats 3
+    python3 hpl_np.py                    # auto: 25% of your RAM
+    python3 hpl_np.py -g 4               # a 4 GiB matrix
+    python3 hpl_np.py -n 4000            # or set N the HPL way
+    python3 hpl_np.py -g 4 --repeats 3
     python3 hpl_np.py --blas-info        # is my BLAS using all my cores?
 
 If top500_data.json (all TOP500 list editions, built by
@@ -62,6 +78,83 @@ except ImportError:
 
 EPS = sys.float_info.epsilon
 TOP500_FILE = "top500_data.json"
+RAM_FRACTION = 0.25
+FALLBACK_N = 4096
+
+
+def physical_ram_bytes():
+    """Best-effort total physical RAM of this machine, or None.
+
+    Used only to pick a safe default problem size.  Linux reads
+    /proc/meminfo, Windows the GlobalMemoryStatusEx API through ctypes,
+    macOS the sysctl behind 'hw.memsize', and other POSIX systems
+    sysconf() — every route is standard library.
+    """
+    try:
+        with open("/proc/meminfo", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    if sys.platform == "win32":
+        import ctypes
+
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_uint),
+                        ("dwMemoryLoad", ctypes.c_uint),
+                        ("ullTotalPhys", ctypes.c_uint64),
+                        ("ullAvailPhys", ctypes.c_uint64),
+                        ("ullTotalPageFile", ctypes.c_uint64),
+                        ("ullAvailPageFile", ctypes.c_uint64),
+                        ("ullTotalVirtual", ctypes.c_uint64),
+                        ("ullAvailVirtual", ctypes.c_uint64),
+                        ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+        stat = MemoryStatusEx()
+        stat.dwLength = ctypes.sizeof(MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return int(stat.ullTotalPhys)
+    if sys.platform == "darwin":
+        import subprocess
+        try:
+            out = subprocess.check_output(["sysctl", "-n", "hw.memsize"])
+            return int(out.strip())
+        except (OSError, ValueError):
+            pass
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def n_to_gib(n):
+    """Memory size of the N x N matrix, in GiB (8 bytes per entry)."""
+    return n * n * 8.0 / 2 ** 30
+
+
+def gib_to_n(gib):
+    """The largest matrix order N whose matrix fits in gib GiB."""
+    return int((gib * 2 ** 30 / 8.0) ** 0.5)
+
+
+def choose_size(n=None, gib=None):
+    """Turn the user's size request into (N, GiB, RAM bytes).
+
+    An explicit -n wins, then an explicit -g, then the default: 25% of
+    the detected physical RAM for the matrix — which peaks around 50%
+    of RAM during the solve, because np.linalg.solve factors a copy of
+    A.  If RAM cannot be detected at all, N=4096, small enough to be
+    safe on any machine that can run numpy at all.
+    """
+    ram = physical_ram_bytes()
+    if n is not None:
+        return n, n_to_gib(n), ram
+    if gib is not None:
+        return gib_to_n(gib), gib, ram
+    if ram:
+        gib = RAM_FRACTION * ram / 2 ** 30
+        return gib_to_n(gib), gib, ram
+    return FALLBACK_N, n_to_gib(FALLBACK_N), None
 
 
 def gen_problem(n, seed):
@@ -91,7 +184,7 @@ def residual_checks(a, b, x, x_true):
     return scaled, fwd_err
 
 
-def run_benchmark(n, seed, repeats=3):
+def run_benchmark(n, seed, repeats=3, progress=None):
     """One NumPy benchmark run: warm-up, best-of-k, residual check.
 
     Real benchmark practice (and HPL's own): warm up first, then take the
@@ -100,24 +193,41 @@ def run_benchmark(n, seed, repeats=3):
     low-power state — none of which is the machine's sustained rate.
     The best-of-k number is the honest Rmax-style figure; the first-call
     number is what a one-shot script would actually feel.
+
+    progress, if given, is called with a message string at each phase
+    and after every run — a big problem otherwise sits silent for
+    minutes, and a silent benchmark looks like a crash.
     """
+    if progress is None:
+        progress = lambda msg: None
+    flops = 2.0 / 3.0 * n ** 3 + 2.0 * n ** 2      # HPL's operation count
+    progress("Phase 1/3: generating the random {}x{} problem...".format(n, n))
     a, x_true = gen_problem(n, seed)
     b = a @ x_true
+    progress("Phase 2/3: solving  A x = b  (1 warm-up + {} timed run{})".format(
+        repeats, "" if repeats == 1 else "s"))
 
     times = []
     for i in range(1 + repeats):          # 1 warm-up + repeats timed
         t0 = time.perf_counter()
         x = np.linalg.solve(a, b)         # LAPACK dgetrf + dgetrs, threaded
         elapsed = time.perf_counter() - t0
-        if i > 0:
+        if i == 0:
+            progress("  warm-up : {:8.2f} s   (not counted)".format(elapsed))
+        else:
             times.append(elapsed)
+            progress("  run {}/{}: {:8.2f} s   -> {:8.1f} Gflop/s"
+                     "   (best so far: {:8.1f})".format(
+                         i, repeats, elapsed, flops / elapsed / 1e9,
+                         flops / min(times) / 1e9))
 
+    progress("Phase 3/3: checking the residual (HPL's pass/fail test)...")
     best = min(times)
     median = sorted(times)[len(times) // 2]
     scaled, fwd_err = residual_checks(a, b, x, x_true)
-    flops = 2.0 / 3.0 * n ** 3 + 2.0 * n ** 2      # HPL's operation count
     return {
         "n": n,
+        "gib": n_to_gib(n),
         "seed": seed,
         "repeats": repeats,
         "time": best,
@@ -186,8 +296,9 @@ def blas_info():
         print("one pip wheels bundle, 'blas' (netlib) is the slow serial one.)")
     else:
         print("VERDICT: BLAS IS using multiple cores.  If hpl_np.py still")
-        print("feels one-cored, your N is probably too small to parallelize")
-        print("— try -n 4000 and watch the CPU monitor again.")
+        print("feels one-cored, your matrix is probably too small to")
+        print("parallelize — try -g 2 or bigger and watch the CPU monitor")
+        print("again.")
 
 
 def load_top500(path=None):
@@ -286,12 +397,12 @@ def print_top500(res):
                       top["label"], top["top_system"], top["rmax_top"]))
         else:
             print("  on the list, but never No. 1 — every edition's No. 1 "
-                  "was faster")
+              "was faster")
         print("  still on the list in {}   (entry threshold then: "
               "{:.1f} Gflop/s)".format(
                   entry["label"], entry["rmax_entry"]))
         print("A laptop saying \"I was a supercomputer once\" is the "
-              "whole point")
+          "whole point")
         print("of 30 years of Moore's law — enjoy it :)")
     print("=" * 78)
 
@@ -302,6 +413,10 @@ def print_report(res):
     print("HPL-Py NumPy (LAPACK)         N={}   seed={}".format(
         res["n"], res["seed"]))
     print("-" * 78)
+    print("Matrix size (N x N, 8 B each)  : {:10.2f} GiB".format(
+        res["gib"]))
+    print("Peak RAM during the solve      : ~{:9.2f} GiB"
+          "   (LAPACK factors a copy of A)".format(2.0 * res["gib"]))
     print("Time for factor + solve        : {:10.4f} s"
           "   (best of {} after warm-up)".format(
               res["time"], res["repeats"]))
@@ -319,8 +434,13 @@ def print_report(res):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="NumPy HPL Linpack benchmark (np.linalg.solve)")
-    parser.add_argument("-n", "--n", type=int, default=4096,
-                        help="matrix order N (default 4096)")
+    parser.add_argument("-g", "--gib", type=float, default=None,
+                        help="size of the N x N matrix in GiB (default: "
+                             "25%% of the machine's physical RAM, a safe "
+                             "choice for a ~50%% peak during the solve)")
+    parser.add_argument("-n", "--n", type=int, default=None,
+                        help="matrix order N directly — the HPL "
+                             "traditionalist's spelling of --gib")
     parser.add_argument("--seed", type=int, default=42,
                         help="random seed (default 42)")
     parser.add_argument("--repeats", type=int, default=3,
@@ -335,18 +455,43 @@ def main(argv=None):
     if args.blas_info:
         blas_info()
         return 0
-    if args.n < 1:
+    if args.n is not None and args.gib is not None:
+        parser.error("give either -n or -g, not both")
+    if args.n is not None and args.n < 1:
         parser.error("N must be positive")
+    if args.gib is not None and args.gib <= 0:
+        parser.error("--gib must be positive")
 
-    res = run_benchmark(args.n, args.seed, args.repeats)
+    n, gib, ram = choose_size(args.n, args.gib)
+    auto = args.n is None and args.gib is None
+
+    def note(msg):
+        print(msg, flush=True)
+
+    print("=" * 78)
+    if auto and ram:
+        print("Sizing: {:.1f} GiB of RAM detected -> default matrix is".format(
+            ram / 2 ** 30))
+        print("25% of that: {:.2f} GiB -> N={}".format(gib, n))
+    elif auto:
+        print("Sizing: could not detect RAM -> safe default N={}".format(n))
+        print("(a {:.2f} GiB matrix; pass -g GIB to choose a size)".format(gib))
+    else:
+        print("Sizing: {:.2f} GiB matrix -> N={}".format(gib, n))
+    print("The solve briefly needs ~2x the matrix: ~{:.2f} GiB of RAM.".format(
+        2.0 * gib))
+    print("=" * 78)
+
+    res = run_benchmark(n, args.seed, args.repeats, progress=note)
     print_report(res)
     if not args.no_top500:
         print_top500(res)
     print()
-    print("Tip: this was N={} — Gflop/s keeps rising with N as the BLAS".format(args.n))
-    print("finds more parallel work.  Try -n 8192, -n 16384, -n 32768, ...")
-    print("Each run needs ~2*8*N^2 bytes of RAM (N=16384 ~ 4 GiB, N=32768")
-    print("~ 16 GiB), so stop at roughly 35-40% of your machine's memory.")
+    print("Tip: this was a {:.2f} GiB matrix (N={}) — Gflop/s keeps".format(
+        gib, n))
+    print("rising with size as the BLAS finds more parallel work.  Try")
+    print("-g 8, -g 16, ... (a run needs ~2x the matrix size in RAM, so")
+    print("stay under ~50% of your machine's memory.)")
     return 0 if res["passed"] else 1
 
 
