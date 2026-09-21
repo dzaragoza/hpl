@@ -246,6 +246,52 @@ class TestRunBenchmark(unittest.TestCase):
             float(np.abs(x - x_true).max()), 0.0, delta=1e-10)
 
 
+class TestSizing(unittest.TestCase):
+    """The user-friendly size knob: GiB in, N out, RAM-based default."""
+
+    def test_choose_size_explicit_n_wins(self):
+        n, gib, ram = hpl_np.choose_size(n=100, gib=8)
+        self.assertEqual(n, 100)
+        self.assertAlmostEqual(gib, 100 * 100 * 8 / 2 ** 30)
+
+    def test_choose_size_explicit_gib(self):
+        n, gib, ram = hpl_np.choose_size(gib=8)
+        self.assertEqual(n, 32768)          # the classic 8 GiB matrix
+        self.assertEqual(gib, 8)
+
+    def test_choose_size_default_is_25pct_of_ram(self):
+        ram = 32 * 2 ** 30
+        orig = hpl_np.physical_ram_bytes
+        hpl_np.physical_ram_bytes = lambda: ram
+        try:
+            n, gib, ram_out = hpl_np.choose_size()
+        finally:
+            hpl_np.physical_ram_bytes = orig
+        self.assertEqual(ram_out, ram)
+        self.assertAlmostEqual(gib, 8.0)
+        self.assertEqual(n, hpl_np.gib_to_n(8.0))
+
+    def test_choose_size_fallback_without_ram_detection(self):
+        orig = hpl_np.physical_ram_bytes
+        hpl_np.physical_ram_bytes = lambda: None
+        try:
+            n, gib, ram_out = hpl_np.choose_size()
+        finally:
+            hpl_np.physical_ram_bytes = orig
+        self.assertEqual(n, 4096)
+        self.assertEqual(ram_out, None)
+        self.assertAlmostEqual(gib, hpl_np.n_to_gib(4096))
+
+    def test_gib_n_round_trip_is_conservative(self):
+        """The matrix for the returned N never EXCEEDS the requested
+        GiB (floor on the N side), and is never smaller than half of
+        it (one order of N can't lose more than ~2x in area)."""
+        for gib in (0.25, 1, 4, 8, 16):
+            n = hpl_np.gib_to_n(gib)
+            self.assertLessEqual(hpl_np.n_to_gib(n), gib)
+            self.assertGreater(hpl_np.n_to_gib(n), gib / 2)
+
+
 class TestReportAndCLI(unittest.TestCase):
 
     def test_print_report_runs(self):
@@ -262,6 +308,10 @@ class TestReportAndCLI(unittest.TestCase):
         with self.assertRaises(SystemExit):
             hpl_np.main(["-n", "0"])
 
+    def test_n_and_gib_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit):
+            hpl_np.main(["-n", "100", "-g", "1"])
+
     def test_seed_option_accepted(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -270,25 +320,77 @@ class TestReportAndCLI(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("seed=123", buf.getvalue())
 
-    def test_default_n_is_4096(self):
+    def test_print_report_shows_gib_and_n(self):
+        res = hpl_np.run_benchmark(n=80, seed=6, repeats=1)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            hpl_np.main(["--no-top500"])
-        self.assertIn("N=4096", buf.getvalue())
+            hpl_np.print_report(res)
+        out = buf.getvalue()
+        self.assertIn("N=80", out)
+        self.assertIn("GiB", out)
+        self.assertIn("LAPACK factors a copy of A", out)
+
+    def test_default_sizing_uses_25pct_of_ram(self):
+        """No -n and no -g: the default matrix is 25% of the detected
+        RAM (here faked to 64 MiB, so the run stays instant)."""
+        ram = 64 * 2 ** 20
+        orig = hpl_np.physical_ram_bytes
+        hpl_np.physical_ram_bytes = lambda: ram
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                code = hpl_np.main(["--no-top500"])
+        finally:
+            hpl_np.physical_ram_bytes = orig
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("25% of that", out)
+        n = hpl_np.gib_to_n(0.25 * ram / 2 ** 30)
+        self.assertIn("N={}".format(n), out)
+        self.assertIn("25% of that: {:.2f} GiB -> N={}".format(
+            hpl_np.n_to_gib(n), n), out)
+
+    def test_cli_gib_flag_sets_size(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = hpl_np.main(["-g", "0.001", "--no-top500"])
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        n = hpl_np.gib_to_n(0.001)
+        self.assertIn("N={}".format(n), out)
+        self.assertIn("Sizing: {:.2f} GiB matrix -> N={}".format(
+            hpl_np.n_to_gib(n), n), out)
+
+    def test_run_prints_phases_and_progress(self):
+        """No silence: every phase is announced, and each timed run
+        reports its own Gflop/s as it completes."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = hpl_np.main(["-g", "0.001", "--repeats", "2"])
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("Phase 1/3", out)
+        self.assertIn("Phase 2/3", out)
+        self.assertIn("Phase 3/3", out)
+        self.assertIn("warm-up", out)
+        self.assertIn("run 1/2", out)
+        self.assertIn("run 2/2", out)
+        self.assertIn("Gflop/s", out)
+        self.assertIn("best so far", out)
 
     def test_run_prints_try_other_sizes_tip(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             code = hpl_np.main(["-n", "60", "--repeats", "1"])
         self.assertEqual(code, 0)
-        self.assertIn("Try -n 8192", buf.getvalue())
+        self.assertIn("-g 8", buf.getvalue())
 
     def test_no_top500_still_prints_tip(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             code = hpl_np.main(["-n", "60", "--no-top500"])
         self.assertEqual(code, 0)
-        self.assertIn("Try -n 8192", buf.getvalue())
+        self.assertIn("-g 8", buf.getvalue())
         self.assertNotIn("TOP500 calibration", buf.getvalue())
 
 
